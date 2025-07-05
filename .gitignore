@@ -1,0 +1,6 @@
+# Ignore logs and analytics files
+*.log
+fallback_clicks.jsonl
+.DS_Store
+.gitgnore
+script.py

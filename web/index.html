@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Video Ad Tracker</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        background-color: #f8f9fa;
+        padding: 20px;
+        text-align: center;
+      }
+
+      video {
+        width: 90%;
+        max-width: 800px;
+        margin: 20px auto;
+        display: block;
+        border: 2px solid #ccc;
+        border-radius: 10px;
+      }
+
+      #ad-buttons,
+      #analytics-section {
+        margin-top: 20px;
+      }
+
+      button {
+        margin: 10px;
+        padding: 10px 20px;
+        font-size: 16px;
+        background-color: #007bff;
+        color: white;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        background-color: #ccc;
+        cursor: not-allowed;
+      }
+
+      select,
+      input {
+        padding: 8px;
+        font-size: 16px;
+        margin: 5px;
+        border-radius: 5px;
+        border: 1px solid #ccc;
+      }
+
+      pre {
+        background-color: #e9ecef;
+        padding: 15px;
+        text-align: left;
+        border-radius: 10px;
+        overflow: auto;
+        max-height: 300px;
+        max-width: 800px;
+        margin: 0 auto;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>Video Player with One Random Ad</h2>
+    <video id="videoPlayer" controls>
+      <source src="/assets/videos/video.mp4" type="video/mp4" />
+      Your browser does not support the video tag.
+    </video>
+
+    <div id="ad-buttons" style="display: none">
+      <button id="clickAdBtn">Click Ad</button>
+      <button id="skipAdBtn" disabled>Skip Ad</button>
+    </div>
+
+    <div id="analytics-section">
+      <h3>Get Ad Analytics</h3>
+      <select id="adSelect">
+        <option disabled selected>Loading ads...</option>
+      </select>
+
+      <select id="timeframeSelect">
+        <option value="1h">Last 1 hour</option>
+        <option value="24h">Last 24 hours</option>
+        <option value="7d">Last 7 days</option>
+        <option value="all">All time</option>
+      </select>
+
+      <button id="getAnalyticsBtn">Get Analytics</button>
+      <pre id="analyticsOutput"></pre>
+    </div>
+
+    <script>
+      const video = document.getElementById("videoPlayer");
+      const adButtons = document.getElementById("ad-buttons");
+      const clickBtn = document.getElementById("clickAdBtn");
+      const skipBtn = document.getElementById("skipAdBtn");
+      const adSelect = document.getElementById("adSelect");
+      const timeframeSelect = document.getElementById("timeframeSelect");
+      const getAnalyticsBtn = document.getElementById("getAnalyticsBtn");
+      const analyticsOutput = document.getElementById("analyticsOutput");
+
+      let ad = null;
+      let ads = [];
+      let adInjected = false;
+      let injectTime = 0;
+      let returnTime = 0;
+      let adTimeout = null;
+      let mainVideoSrc = video.querySelector("source").src;
+
+      async function fetchAds() {
+        const res = await fetch("/ads");
+        ads = await res.json();
+        ad = ads[Math.floor(Math.random() * ads.length)];
+
+        adSelect.innerHTML = "";
+        ads.forEach((a) => {
+          const option = document.createElement("option");
+          option.value = a.id;
+          option.textContent = a.id;
+          adSelect.appendChild(option);
+        });
+      }
+
+      function disableControlsDuringAd() {
+        video.controls = false;
+        video.addEventListener("seeking", preventSeek);
+      }
+
+      function enableControlsAfterAd() {
+        video.controls = true;
+        video.removeEventListener("seeking", preventSeek);
+      }
+
+      function preventSeek(e) {
+        e.preventDefault();
+        video.currentTime = 0;
+      }
+
+      function showSkipButtonAfter(seconds) {
+        skipBtn.disabled = true;
+        clearTimeout(adTimeout);
+        adTimeout = setTimeout(() => {
+          skipBtn.disabled = false;
+        }, seconds * 1000);
+      }
+
+      async function sendAdClick() {
+        const ip = await fetch("https://api64.ipify.org?format=json").then(
+          (res) => res.json()
+        );
+        const payload = {
+          adId: ad.id,
+          timestamp: new Date().toISOString(),
+          ipAddress: ip.ip,
+          videoPlaybackTime: returnTime,
+        };
+
+        await fetch("/ads/click", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        alert("Ad click logged!");
+      }
+
+      function handleAdPlayback() {
+        disableControlsDuringAd();
+        adButtons.style.display = "block";
+        showSkipButtonAfter(5);
+
+        video.src = ad.video_url;
+        video.load();
+        video.currentTime = 0;
+
+        let impressionSent = false;
+
+        video.onplay = async () => {
+          if (!impressionSent) {
+            impressionSent = true;
+            try {
+              await fetch("/ads/impression", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ad_id: ad.id }),
+              });
+              console.log("Impression recorded");
+            } catch (err) {
+              console.warn("Failed to record impression:", err);
+            }
+          }
+        };
+
+        video.play();
+
+        video.onended = () => {
+          adButtons.style.display = "none";
+          enableControlsAfterAd();
+          video.src = mainVideoSrc;
+          video.load();
+          video.currentTime = returnTime;
+          video.play();
+        };
+      }
+
+      video.addEventListener("loadedmetadata", () => {
+        const min = 5;
+        const max = video.duration - 5;
+        injectTime = Math.floor(Math.random() * (max - min + 1)) + min;
+        console.log("Ad will play at", injectTime, "seconds");
+      });
+
+      video.addEventListener("timeupdate", () => {
+        if (!adInjected && video.currentTime >= injectTime) {
+          adInjected = true;
+          returnTime = video.currentTime;
+          handleAdPlayback();
+        }
+      });
+
+      clickBtn.onclick = sendAdClick;
+
+      skipBtn.onclick = () => {
+        clearTimeout(adTimeout);
+        video.dispatchEvent(new Event("ended"));
+      };
+
+      getAnalyticsBtn.onclick = async () => {
+        const adId = adSelect.value;
+        const timeframe = timeframeSelect.value;
+
+        if (!adId) {
+          alert("Please select an Ad ID");
+          return;
+        }
+
+        const res = await fetch(
+          `/ads/analytics?adId=${adId}&timeframe=${timeframe}`
+        );
+        const data = await res.json();
+        analyticsOutput.textContent = JSON.stringify(data, null, 2);
+      };
+
+      fetchAds();
+    </script>
+  </body>
+</html>
